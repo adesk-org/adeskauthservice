@@ -31,12 +31,12 @@ public class AppClientProperties {
         List<RegisteredClient> list = new ArrayList<>();
         for (Client c : clients) {
             RegisteredClient.Builder b = RegisteredClient.withId(UUID.randomUUID().toString())
-                    .clientId(c.clientId).redirectUris(uris -> uris.addAll(c.redirectUris))
+                    .clientId(c.getClientId()).redirectUris(uris -> uris.addAll(c.getRedirectUris()))
                     .scope("openid").scope("profile").scope("email");
-            c.scopes.forEach(b::scope);
-            if (Boolean.TRUE.equals(c.confidential)) {
-                b.clientSecret(
-                        c.clientSecret != null ? pe.encode(c.clientSecret) : pe.encode("change-me"))
+            c.getScopes().forEach(b::scope);
+            if (Boolean.TRUE.equals(c.getConfidential())) {
+                b.clientSecret(c.getClientSecret() != null ? pe.encode(c.getClientSecret())
+                        : pe.encode("change-me"))
                         .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC);
             } else {
                 b.clientAuthenticationMethod(ClientAuthenticationMethod.NONE);
@@ -49,10 +49,51 @@ public class AppClientProperties {
     }
 
     public static class Client {
-        public String clientId;
-        public String clientSecret;
-        public List<String> redirectUris = new ArrayList<>();
-        public List<String> scopes = new ArrayList<>();
-        public Boolean confidential = false;
+        private String clientId;
+        private String clientSecret;
+        private List<String> redirectUris = new ArrayList<>();
+        private List<String> scopes = new ArrayList<>();
+        private Boolean confidential = Boolean.FALSE;
+
+        public String getClientId() {
+            return clientId;
+        }
+
+        public void setClientId(String clientId) {
+            this.clientId = clientId;
+        }
+
+        public String getClientSecret() {
+            return clientSecret;
+        }
+
+        public void setClientSecret(String clientSecret) {
+            this.clientSecret = clientSecret;
+        }
+
+        public List<String> getRedirectUris() {
+            return redirectUris;
+        }
+
+        public void setRedirectUris(List<String> redirectUris) {
+            this.redirectUris = redirectUris != null ? new ArrayList<>(redirectUris)
+                    : new ArrayList<>();
+        }
+
+        public List<String> getScopes() {
+            return scopes;
+        }
+
+        public void setScopes(List<String> scopes) {
+            this.scopes = scopes != null ? new ArrayList<>(scopes) : new ArrayList<>();
+        }
+
+        public Boolean getConfidential() {
+            return confidential;
+        }
+
+        public void setConfidential(Boolean confidential) {
+            this.confidential = confidential;
+        }
     }
 }
