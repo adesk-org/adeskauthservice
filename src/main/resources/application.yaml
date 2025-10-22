@@ -1,0 +1,29 @@
+server:
+  port: 8082
+  servlet:
+    context-path: /
+  forward-headers-strategy: framework
+
+app:
+  issuer: https://auth.adesk.local # appears in iss claim & OIDC discovery
+  jwk:
+    key-id: adesk-jwk-1
+  oauth:
+    # match your OpenAPI paths
+    authorize-endpoint: /oauth/authorize
+    token-endpoint: /oauth/token
+    jwk-set-endpoint: /.well-known/jwks.json
+    introspection-endpoint: /oauth/introspect
+    revocation-endpoint: /oauth/revoke
+  clients:
+    - clientId: adesk-ui
+      redirectUris:
+        - http://localhost:5173/callback
+      scopes: [openid, profile, email, tickets:read, tickets:write]
+    # - clientId: adesk-bff
+    #   clientSecret: "{noop}dev-secret" # demo only; use BCrypt in real env
+    #   redirectUris:
+    #     - http://localhost:4000/auth/callback
+    #   scopes:
+    #     [openid, profile, email, tickets:read, tickets:write, admin:tenant]
+    #   confidential: true

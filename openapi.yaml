@@ -1,0 +1,446 @@
+openapi: 3.0.3
+info:
+  title: Adesk Auth Service (adesk-auth-svc)
+  version: "1.0.0"
+  description: |
+    Identity & Access Management for Adesk.
+    - OAuth2/OIDC (Authorization Code + PKCE)
+    - JWT access tokens; JWKS for verification
+    - First-party register/login/refresh/logout convenience
+    - Multi-tenant: tokens carry tenant & role claims
+servers:
+  - url: https://auth.adesk.local
+    description: Local/dev through reverse proxy
+  - url: https://auth.adesk.example.com
+    description: Prod
+
+tags:
+  - name: oauth
+    description: OAuth2/OIDC endpoints (public)
+  - name: auth
+    description: First-party auth helpers (server-side only)
+  - name: tenants
+    description: Tenant SSO (IdP) configuration
+  - name: users
+    description: User management (minimal public)
+
+security:
+  - BearerAuth: []
+
+paths:
+  /.well-known/openid-configuration:
+    get:
+      tags: [oauth]
+      summary: OIDC discovery document
+      operationId: getOpenIdConfiguration
+      responses:
+        "200":
+          description: OIDC provider metadata
+          content:
+            application/json: {}
+
+  /.well-known/jwks.json:
+    get:
+      tags: [oauth]
+      summary: JSON Web Key Set (public keys)
+      operationId: getJwks
+      responses:
+        "200":
+          description: JWKS used to verify JWTs
+          content:
+            application/json: {}
+
+  /oauth/authorize:
+    get:
+      tags: [oauth]
+      summary: Authorization endpoint (PKCE)
+      operationId: authorize
+      parameters:
+        - in: query
+          name: response_type
+          schema: { type: string, enum: [code] }
+          required: true
+        - in: query
+          name: client_id
+          schema: { type: string }
+          required: true
+        - in: query
+          name: redirect_uri
+          schema: { type: string, format: uri }
+          required: true
+        - in: query
+          name: scope
+          schema: { type: string }
+          required: true
+          description: Space-delimited scopes
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: code_challenge
+          schema: { type: string }
+          required: true
+        - in: query
+          name: code_challenge_method
+          schema: { type: string, enum: [S256] }
+          required: true
+        - in: query
+          name: prompt
+          schema: { type: string, enum: [login, none, consent] }
+      responses:
+        "302":
+          description: Redirect with authorization code
+
+  /oauth/token:
+    post:
+      tags: [oauth]
+      summary: Exchange code for tokens (and refresh)
+      operationId: token
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code, refresh_token]
+                code:
+                  type: string
+                  description: Required for authorization_code
+                redirect_uri:
+                  type: string
+                  format: uri
+                client_id:
+                  type: string
+                  description: Public clients use client_id + PKCE
+                code_verifier:
+                  type: string
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: Token response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /oauth/introspect:
+    post:
+      tags: [oauth]
+      summary: Introspect a token (service-to-service)
+      operationId: introspect
+      security: [{ ClientCredentials: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: RFC 7662-style introspection response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Introspection"
+
+  /oauth/revoke:
+    post:
+      tags: [oauth]
+      summary: Revoke refresh/access token
+      operationId: revoke
+      security: [{ ClientCredentials: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Revoked (idempotent)
+
+  /userinfo:
+    get:
+      tags: [oauth]
+      summary: OIDC userinfo
+      operationId: userinfo
+      security: [{ BearerAuth: [] }]
+      responses:
+        "200":
+          description: Standard OIDC claims plus Adesk roles/teams
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+
+  /v1/me:
+    get:
+      tags: [auth]
+      summary: Current user profile & memberships
+      operationId: me
+      security: [{ BearerAuth: [] }]
+      responses:
+        "200":
+          description: Claims, tenant memberships, roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+
+  /v1/auth/register:
+    post:
+      tags: [auth]
+      summary: First-party user registration (email/password)
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 12 }
+                displayName: { type: string, maxLength: 120 }
+      responses:
+        "201":
+          description: Registered (verify email flow may follow)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPublic" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Server-side login (first-party only)
+      operationId: login
+      description: |
+        Exchange email/password for tokens. Use only on trusted servers
+        (BFF) — prefer OAuth Authorization Code + PKCE for SPAs/mobile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Token response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh access token (first-party)
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: New access/refresh tokens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Invalidate refresh tokens (session logout)
+      operationId: logout
+      security: [{ BearerAuth: [] }]
+      responses:
+        "204":
+          description: Logged out
+
+  /v1/tenants/{tenantId}/idp:
+    post:
+      tags: [tenants]
+      summary: Configure tenant SSO (OIDC/SAML metadata)
+      operationId: configureTenantIdp
+      security: [{ BearerAuth: [admin:tenant] }]
+      parameters:
+        - $ref: "#/components/parameters/tenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantIdPConfig"
+      responses:
+        "204":
+          description: IdP configured
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.adesk.example.com/oauth/authorize
+          tokenUrl: https://auth.adesk.example.com/oauth/token
+          scopes:
+            openid: OpenID Connect
+            profile: Basic profile
+            email: Email address
+            tickets:read: Read ticket data
+            tickets:write: Modify ticket data
+            admin:tenant: Manage tenant settings/IdP
+    ClientCredentials:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.adesk.example.com/oauth/token
+          scopes:
+            introspect: Token introspection
+            revoke: Token revocation
+
+  parameters:
+    tenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema: { type: string }
+
+  schemas:
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        id_token:
+          { type: string, description: "Present if scope contains 'openid'" }
+        refresh_token: { type: string }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer }
+        scope: { type: string }
+
+    Introspection:
+      type: object
+      properties:
+        active: { type: boolean }
+        scope: { type: string }
+        sub: { type: string }
+        exp: { type: integer }
+        iat: { type: integer }
+        iss: { type: string }
+        client_id: { type: string }
+        tenant_id: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        teams:
+          type: array
+          items: { type: string }
+
+    UserInfo:
+      type: object
+      properties:
+        sub: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        email_verified: { type: boolean }
+        tenant_id: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        teams:
+          type: array
+          items: { type: string }
+
+    Me:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/UserPublic" }
+        memberships:
+          type: array
+          items:
+            type: object
+            properties:
+              tenant_id: { type: string }
+              roles:
+                type: array
+                items: { type: string }
+              teams:
+                type: array
+                items: { type: string }
+
+    UserPublic:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        created_at: { type: string, format: date-time }
+
+    TenantIdPConfig:
+      type: object
+      description: OIDC (preferred) or SAML metadata for a tenant
+      properties:
+        type: { type: string, enum: [OIDC, SAML] }
+        oidc:
+          type: object
+          properties:
+            issuer: { type: string }
+            client_id: { type: string }
+            client_secret: { type: string, nullable: true }
+            redirect_uris:
+              type: array
+              items: { type: string, format: uri }
+        saml:
+          type: object
+          properties:
+            metadataXml: { type: string }
+            acsUrl: { type: string, format: uri }
+      oneOf:
+        - required: [type, oidc]
+        - required: [type, saml]
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        error_description: { type: string }
